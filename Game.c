@@ -66,11 +66,11 @@
 #define SNAKE_CHASE_STEPS -1  
 #define UNDEAD_CHASE_STEPS 5
 #define MAX_SCORE_ENTRIES 1000
-#define FILENAME "leaderboard.txt"
+#define FILENAME "bbb.txt"
 #define MAX_DISPLAY_ENTRIES 10
-#define GOLD_COLOR 1
-#define SILVER_COLOR 2
-#define BRONZE_COLOR 3
+#define GOLD_COLOR 10
+#define SILVER_COLOR 11
+#define BRONZE_COLOR 12
 
 
 
@@ -199,6 +199,7 @@ typedef struct {
 User loggedInUser; 
 User users[MAX_USERS];
 int user_count = 0;
+char* theme = "Dark"; 
 
 void preGameMenu(WINDOW *win);
 
@@ -846,14 +847,13 @@ void place_food_in_rooms(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int num_
 }
 
 void place_traps_in_rooms(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int num_rooms) {
-    int selected_rooms[3] = {-1, -1, -1};  // ذخیره اندیس اتاق‌هایی که تله دارند
+    int selected_rooms[3] = {-1, -1, -1}; 
     int trap_rooms_count = 0;
 
 
     while (trap_rooms_count < 3 && trap_rooms_count < num_rooms) {
         int room_index = rand() % num_rooms;
 
-        // بررسی اینکه این اتاق قبلاً انتخاب نشده باشد
         int already_selected = 0;
         for (int i = 0; i < trap_rooms_count; i++) {
             if (selected_rooms[i] == room_index) {
@@ -863,18 +863,17 @@ void place_traps_in_rooms(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int num
         }
         if (already_selected) continue;
 
-        // انتخاب اتاق و گذاشتن تله
         selected_rooms[trap_rooms_count++] = room_index;
         Room selected_room = rooms[room_index];
 
-        int trap_count = rand() % 2;  // تعداد تله‌های داخل اتاق (1 یا 2)
+        int trap_count = rand() % 2; 
         for (int i = 0; i < trap_count; i++) {
             int tx, ty;
             do {
                 tx = selected_room.x + 1 + rand() % (selected_room.width - 2);
                 ty = selected_room.y + 1 + rand() % (selected_room.height - 2);
             } while (map[ty][tx] != FLOOR_CHAR);
-            map[ty][tx] = TRAP_HIDDEN_CHAR;  // تله مخفی
+            map[ty][tx] = TRAP_HIDDEN_CHAR; 
         }
     }
 }
@@ -907,7 +906,11 @@ void draw_map_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH], char visible_map[
         for (int j = 0; j < MAP_WIDTH; j++) {
             if (visible_map[i][j]) {
                 if (map[i][j] == WALL_HORIZONTAL || map[i][j] == WALL_VERTICAL || map[i][j] == SECRET_DOOR_HIDDEN) {
-                    attron(COLOR_PAIR(1));
+                     if (theme == "Light") {
+                        attron(COLOR_PAIR(4));
+                    } else {
+                        attron(COLOR_PAIR(1)); 
+                    }
                 } else if (map[i][j] == CORRIDOR_CHAR || map[i][j] == BLACK_GOLD_CHAR) {
                     attron(COLOR_PAIR(2));
                 } else if (map[i][j] == FLOOR_CHAR || map[i][j] == TRAP_HIDDEN_CHAR) {
@@ -1086,7 +1089,9 @@ void move_player_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH],char visible_ma
                     refresh();
                     napms(2000);
                     endwin();
-                    preGameMenu(win);
+                    // preGameMenu(win);
+                    exit(0);
+                    
                 }
         }
     }
@@ -1164,8 +1169,8 @@ void handle_player_movement(char map[MAP_HEIGHT][MAP_WIDTH],char visible_map[MAP
             napms(3000);
             endwin();
              gameRunning = 0;
-            preGameMenu(win);
-            
+            // preGameMenu(win);
+            exit(0);
         }
 
 
@@ -1444,6 +1449,7 @@ void main_naghsheh(WINDOW *win) {
     init_color(COLOR_LIGHT_BLUE, 500, 500, 1000);
     }
    
+   
     init_pair(1, COLOR_RED, COLOR_BLACK); 
     init_pair(2, COLOR_BLUE, COLOR_BLACK);
     init_pair(3, COLOR_GREEN, COLOR_BLACK); 
@@ -1453,7 +1459,7 @@ void main_naghsheh(WINDOW *win) {
     init_pair(7, COLOR_CUSTOM_PURPLE, COLOR_BLACK);
     init_pair(8, COLOR_LIGHT_BLUE, COLOR_BLACK);
     init_pair(9, COLOR_orange, COLOR_BLACK);
-
+    
     noecho();
     curs_set(FALSE);
     srand(time(NULL));
@@ -1523,12 +1529,19 @@ void display_leaderboard(WINDOW *win) {
     int scroll_offset = 0;
     int key;
     load_leaderboard(FILENAME);
-    
+    initscr();
     start_color();
-    init_pair(GOLD_COLOR, COLOR_YELLOW, COLOR_BLACK);
-    init_pair(SILVER_COLOR, COLOR_WHITE, COLOR_BLACK);
-    init_pair(BRONZE_COLOR, COLOR_MAGENTA, COLOR_BLACK);
 
+    if (can_change_color()) {
+        init_color(GOLD_COLOR, 1000, 843, 0);   
+        init_color(SILVER_COLOR, 752, 752, 752);     
+        init_color(BRONZE_COLOR, 804, 498, 196);  
+    }
+
+    init_pair(10, GOLD_COLOR, COLOR_BLACK);  
+    init_pair(11, SILVER_COLOR, COLOR_BLACK);    
+    init_pair(12, BRONZE_COLOR, COLOR_BLACK); 
+    
     do {
         werase(win);
         box(win, 0, 0);
@@ -1537,32 +1550,33 @@ void display_leaderboard(WINDOW *win) {
         mvwprintw(win, start_row, 2, "=== Leaderboard ===");
         wattroff(win, A_BOLD);
 
-        mvwprintw(win, start_row + 1, 2, "Rank  Username       Points  Gold  Games  Experience");
-
+        mvwprintw(win, start_row + 1, 2, "Rank  Username       Points  Gold  Games  Experience  Start_time");
+        wattron(win, COLOR_PAIR(10));
+        mvwprintw(win, start_row + 3, 2, "Legend->");
+        mvwprintw(win, start_row + 4, 2, "Champion->");
+        mvwprintw(win, start_row + 5, 2, "GOAT->");
         int display_count = 0;
-        // for (int i = scroll_offset; i < leaderboard_size && display_count < MAX_DISPLAY_ENTRIES; i++) {
-            int row = start_row + 3 + display_count;
-        for(int i=0 ; i < 10 ; i++){
+            int row=0;
+        for(int i=0 ; i <leaderboard_size  ; i++){
+            row = start_row + 3 + display_count;
+            if (i == 0) wattron(win, COLOR_PAIR(10));
+            else if (i == 1) wattron(win, COLOR_PAIR(11));
+            else if (i == 2) wattron(win, COLOR_PAIR(12));
+            if (strcmp(leaderboard[i].username, loggedInUser.username) == 0) {
+                wattron(win, A_BOLD | A_REVERSE);
+            }
 
-            // if (i == 0) wattron(win, COLOR_PAIR(GOLD_COLOR));
-            // else if (i == 1) wattron(win, COLOR_PAIR(SILVER_COLOR));
-            // else if (i == 2) wattron(win, COLOR_PAIR(BRONZE_COLOR));
-
-            // // Highlight current user
-            // if (strcmp(leaderboard[i].username, loggedInUser.username) == 0) {
-            //     wattron(win, A_BOLD | A_REVERSE);
-            // }
-
-            mvwprintw(win, row, 2, "%-5d %-14s %-7d %-5d %-6d %-9d",
+            mvwprintw(win, row , 12, "%d |%s         |%d      |%d    |%d     |%d          |%ld",
                       leaderboard[i].rank,
                       leaderboard[i].username,
                       leaderboard[i].total_points,
                       leaderboard[i].gold,
                       leaderboard[i].completed_games,
-                      leaderboard[i].experience);
+                      leaderboard[i].experience,
+                      leaderboard[i].start_time);
 
-            // wattroff(win, A_BOLD | A_REVERSE);
-            // wattroff(win, COLOR_PAIR(GOLD_COLOR) | COLOR_PAIR(SILVER_COLOR) | COLOR_PAIR(BRONZE_COLOR));
+            wattroff(win, A_BOLD | A_REVERSE);
+            wattroff(win, COLOR_PAIR(10) | COLOR_PAIR(11) | COLOR_PAIR(12));
 
             display_count++;
         }
@@ -1570,13 +1584,9 @@ void display_leaderboard(WINDOW *win) {
         mvwprintw(win, start_row + MAX_DISPLAY_ENTRIES + 5, 2, "Use UP/DOWN keys to scroll, 'q' to return.");
         wrefresh(win);
 
-        // Handle scrolling
+        
         key = wgetch(win);
-        if (key == KEY_UP && scroll_offset > 0) {
-            scroll_offset--;
-        } else if (key == KEY_DOWN && scroll_offset < leaderboard_size - MAX_DISPLAY_ENTRIES) {
-            scroll_offset++;
-        }
+            
 
     } while (key != 'q');
 }
@@ -1702,7 +1712,6 @@ void settingsMenu(WINDOW *win) {
 
    
     char *difficulty = "Medium";
-    char *theme = "Light";
     char *selectedMusic = "Music 1";
 
     char *musicList[] = { "Music 1", "Music 2", "Music 3", "Music 4" };
@@ -1756,9 +1765,13 @@ void settingsMenu(WINDOW *win) {
                     mvwprintw(win, 5, 2, "3. Hard");
                     wrefresh(win);
                     key = wgetch(win);
-                    if (key == '1') difficulty = "Easy";
-                    else if (key == '2') difficulty = "Medium";
-                    else if (key == '3') difficulty = "Hard";
+                    if (key == '1') 
+                    {difficulty = "Easy";
+                    player_health=100;}
+                    else if (key == '2'){difficulty = "Medium";
+                    player_health=80;} 
+                    else if (key == '3'){difficulty = "Hard";
+                    player_health=50;} 
                     break;
 
                 case 1: 
@@ -1768,7 +1781,7 @@ void settingsMenu(WINDOW *win) {
                     mvwprintw(win, 4, 2, "2. Dark");
                     wrefresh(win);
                     key = wgetch(win);
-                    if (key == '1') theme = "Light";
+                    if (key == '1')theme = "Light";
                     else if (key == '2') theme = "Dark";
                     break;
 
@@ -2249,7 +2262,7 @@ int main() {
     };
 
     int n_options = sizeof(menu) / sizeof(menu[0]);
-
+    
     initscr();
     start_color();
     init_pair(1, COLOR_GREEN, COLOR_BLACK); 
@@ -2260,7 +2273,7 @@ int main() {
     curs_set(0);
     keypad(stdscr, TRUE);
 
-    int height = 30, width = 100, start_y = 5, start_x = 15;
+    int height = 25, width = 100, start_y = 5, start_x = 15;
     WINDOW *menu_win = newwin(height, width, start_y, start_x);
     keypad(menu_win, TRUE);
 
