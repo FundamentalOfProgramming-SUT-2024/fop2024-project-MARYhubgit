@@ -65,7 +65,6 @@
 #define GIANT_CHASE_STEPS 5
 #define SNAKE_CHASE_STEPS -1  
 #define UNDEAD_CHASE_STEPS 5
-// #define MAX_SCORE_ENTRIES 10
 #define MAX_SCORE_ENTRIES 1000
 #define FILENAME "leaderboard.txt"
 #define MAX_DISPLAY_ENTRIES 10
