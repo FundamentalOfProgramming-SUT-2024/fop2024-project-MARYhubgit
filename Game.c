@@ -6,13 +6,12 @@
 #include <regex.h>
 #include <time.h>
 #include <unistd.h>
-
+#include <stdbool.h>
 
 #define MAX_USERS 1000 
 #define USERNAME_LENGTH 50
 #define PASSWORD_LENGTH 50
 #define EMAIL_LENGTH 100
-
 #define MAP_WIDTH 100
 #define MAP_HEIGHT 30
 #define MAX_CORRIDOR_LENGTH 10
@@ -71,7 +70,11 @@
 #define GOLD_COLOR 10
 #define SILVER_COLOR 11
 #define BRONZE_COLOR 12
+#define HIGH_QUALITY_FOOD 'h' 
+#define MAGIC_FOOD 'm' 
+#define SPOILED_FOOD 'x'  
 
+#define REGEN_RATE 2
 
 
 typedef struct {
@@ -129,7 +132,7 @@ typedef struct {
 } Weapon;
 
 
-Weapon available_weapons[] = {
+Weapon available_weapons[5] = {
     {'g', "Mace", 5, 0, 1},
     {'k', "Dagger", 12, 5, 0},
     {'a', "Magic Wand", 15, 10, 0},
@@ -143,21 +146,22 @@ Weapon current_weapon = {'g', "Mace", 5, 0, 1};
 
 typedef struct {
     int normal_food_count;
+    int high_quality_food_count;
+    int magic_food_count;
+    int spoiled_food_count;
     int hunger;
 } Backpack_Food;
 
-Backpack_Food player_backpack_food = {0,0};
+Backpack_Food player_backpack_food = {0,0,0,0,0};
 
-// typedef struct {
-//     FoodType type;
-//     int health_restore; 
-// } Food;
 
 typedef struct {
     int spell_count;
     int active;       
     int remaining_moves; 
+    int original_weapon_power;
 } SpellStatus;
+
 
 typedef struct {
     SpellStatus health_spells;
@@ -177,18 +181,12 @@ typedef struct {
 } Point;
 
 
-
-typedef struct {
-    int x, y;   
-    int moves;
-} Player;
-
-
 char discovered_map[MAP_HEIGHT][MAP_WIDTH] = {0}; 
 int tala=0;
 int score=0;
 int player_health = 100;
 int player_damage_boost;
+int old_game=0;
 
 typedef struct {
     char username[USERNAME_LENGTH];
@@ -200,10 +198,96 @@ User loggedInUser;
 User users[MAX_USERS];
 int user_count = 0;
 char* theme = "Dark"; 
+int tabagheh = 1;
+
+typedef struct {
+    int x, y;              
+    int health;            
+    int score;             
+    int gold;             
+    int moves;    
+    int tabagheh;         
+    Weapon current_weapon; 
+    Backpack_Food hunger;  
+    Backpack spell;
+    Weapon available_weapons[5];   
+    Enemy enemies[7];    
+    char username[50];    
+} Player;
+
+
 
 void preGameMenu(WINDOW *win);
+void main_naghsheh(WINDOW *win);  
 
+void load_game(const char *username, char map[MAP_HEIGHT][MAP_WIDTH], char visible_map[MAP_HEIGHT][MAP_WIDTH], Player *player) {
+    char filename[100];
+    sprintf(filename, "%s_save.dat", username);
 
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        mvprintw(0, 0, "No saved game found for user %s!", username);
+        return;
+    }
+
+    if (fread(map, sizeof(char), MAP_HEIGHT * MAP_WIDTH, file) != MAP_HEIGHT * MAP_WIDTH) {
+        mvprintw(1, 0, "Error reading map data!");
+        fclose(file);
+        return;
+    }
+
+    if (fread(visible_map, sizeof(char), MAP_HEIGHT * MAP_WIDTH, file) != MAP_HEIGHT * MAP_WIDTH) {
+        mvprintw(2, 0, "Error reading visible map data!");
+        fclose(file);
+        return;
+    }
+
+    if (fread(player, sizeof(Player), 1, file) != 1) {
+        mvprintw(3, 0, "Error reading player data!");
+        fclose(file);
+        return;
+    }
+
+    fclose(file);
+    mvprintw(0, 0, "Game loaded successfully!");
+}
+
+void save_game(char map[MAP_HEIGHT][MAP_WIDTH], char visible_map[MAP_HEIGHT][MAP_WIDTH], Player *player) {
+    char filename[100];
+    sprintf(filename, "%s_save.dat", loggedInUser.username);
+
+    FILE *file = fopen(filename, "wb");
+    if (!file) {
+        mvprintw(0, 0, "Error saving the game!");
+        napms(3000);
+        return;
+    }
+
+    if (fwrite(map, sizeof(char), MAP_HEIGHT * MAP_WIDTH, file) != MAP_HEIGHT * MAP_WIDTH) {
+        mvprintw(1, 0, "Error writing map data!");
+        fclose(file);
+        napms(3000);
+        return;
+    }
+
+    if (fwrite(visible_map, sizeof(char), MAP_HEIGHT * MAP_WIDTH, file) != MAP_HEIGHT * MAP_WIDTH) {
+        mvprintw(2, 0, "Error writing visible map data!");
+        fclose(file);
+        napms(3000);
+        return;
+    }
+
+    if (fwrite(player, sizeof(Player), 1, file) != 1) {
+        mvprintw(3, 0, "Error writing player data!");
+        fclose(file);
+        napms(3000);
+        return;
+    }
+
+    fclose(file);
+    mvprintw(0, 0, "Game saved successfully!");
+    refresh();
+}
 
 
 void load_leaderboard(const char *filename) {
@@ -261,7 +345,7 @@ void update_leaderboard() {
     }
 
     if (found != -1) {
-        leaderboard[found].total_points += tala;
+        leaderboard[found].total_points += (tala+score);
         leaderboard[found].gold += tala;
         leaderboard[found].completed_games++;
         double elapsed = difftime(current_time, leaderboard[found].start_time);
@@ -269,7 +353,7 @@ void update_leaderboard() {
     } else if (leaderboard_size < MAX_SCORE_ENTRIES) {
         strcpy(leaderboard[leaderboard_size].username,loggedInUser.username);
         leaderboard[leaderboard_size].rank = 0;
-        leaderboard[leaderboard_size].total_points = tala;
+        leaderboard[leaderboard_size].total_points = (tala+score);
         leaderboard[leaderboard_size].gold = tala;
         leaderboard[leaderboard_size].completed_games = 1;
         leaderboard[leaderboard_size].start_time = current_time;
@@ -296,30 +380,146 @@ void update_leaderboard() {
     save_leaderboard(FILENAME);
 }
 
-void handle_enemy_attack(Player *player, Enemy enemies[], int num_enemies) {
+void handle_enemy_weapons_attack(Player *player, Enemy enemies[], int num_enemies,char map[MAP_HEIGHT][MAP_WIDTH],WINDOW *win) {
+         bool under_attack = false;
     for (int i = 0; i < num_enemies; i++) {
         if (enemies[i].is_alive) {
             int dx = abs(enemies[i].x - player->x);
             int dy = abs(enemies[i].y - player->y);
 
-            // if (dx <= 1 && dy <= 1) {
-            //     player_health -= enemies[i].damage;
-            //     mvprintw(0, 0, "Attacked by %c! Health: %d", enemies[i].symbol, player_health);
-            //     refresh();
-            //     napms(1000);
-            //     mvprintw(0, 0, "                              ");
-            //     refresh();
+            if (dx <= 1 && dy <= 1 ) {
+               if (current_weapon.symbol=='g' || current_weapon.symbol == 'w'){
+                enemies[i].health -= current_weapon.damage;
+                if (enemies[i].health > 0) {
+                     attron(COLOR_PAIR(3)); 
+                    mvprintw(0, 0, "You attacked %c! Enemy health: %d", enemies[i].symbol, enemies[i].health);
+                     attroff(COLOR_PAIR(3)); 
+                } else {
+                    mvprintw(0, 0, "You defeated %c! You'r score increased '5'", enemies[i].symbol);
+                    enemies[i].is_alive=0;
+                    score+=5;
+                     map[enemies[i].y][enemies[i].x]=FLOOR_CHAR;                }
+                refresh();
+                
 
-            //     if (player_health <= 0) {
-            //         mvprintw(MAP_HEIGHT + 2, 0, "Game Over! You died.");
-            //         refresh();
-            //         napms(2000);
-            //         endwin();
-                    
-            //     }
-            // }
+               }
+
+                player_health -= enemies[i].damage;
+                under_attack = true;
+                attron(COLOR_PAIR(1));
+                mvprintw(1, 0, "Attacked by %c! Health: %d", enemies[i].symbol, player_health);
+                attroff(COLOR_PAIR(1)); 
+                refresh();
+                napms(1000);
+                mvprintw(0, 0, "                                                        ");
+                mvprintw(1, 0, "                                                        ");
+                refresh();
+
+                if (player_health <= 0) {
+                    clear();
+                   attron(COLOR_PAIR(1));   
+                    mvprintw(15, 30, "Game Over! You died.");
+                    attroff(COLOR_PAIR(1));  
+                   int emtiyaz = (score + tala);
+                    mvprintw(16, 31, "Your final score: %d", emtiyaz);
+                    mvprintw(17, 30, "Press 'o' to return to the main menu.");
+                    update_leaderboard();
+                    refresh();
+                    napms(3000);
+                    int key;
+                    while ((key = getch()) != 'o');
+                    clear();
+                    refresh();
+                    tabagheh=5;
+                    main_naghsheh(win);
+                            
+                }
+            }
+             if (dx <= 5 && dy <= 5 )
+             {
+               
+               
+                if (current_weapon.symbol=='t' && available_weapons[3].count>0){
+                enemies[i].health -= current_weapon.damage;
+                
+                    available_weapons[3].count--;
+                
+                if (enemies[i].health > 0) {
+                     attron(COLOR_PAIR(3)); 
+                    mvprintw(0, 0, "You attacked %c! Enemy health: %d", enemies[i].symbol, enemies[i].health);
+                     attroff(COLOR_PAIR(3)); 
+                } else {
+                    mvprintw(0, 0, "You defeated %c! You'r score increased '5'", enemies[i].symbol);
+                    enemies[i].is_alive=0;
+                    score+=5;
+                     map[enemies[i].y][enemies[i].x]=FLOOR_CHAR;                }
+                refresh();
+                if (available_weapons[3].count<=0)
+               {
+                current_weapon.symbol='@';
+               }
+
+               }
+               if ( available_weapons[1].count>0 && current_weapon .symbol== 'k')
+               {
+               enemies[i].health -= current_weapon.damage;
+                    available_weapons[1].count--;
+                
+                if (enemies[i].health > 0) {
+                     attron(COLOR_PAIR(3)); 
+                    mvprintw(0, 0, "You attacked %c! Enemy health: %d", enemies[i].symbol, enemies[i].health);
+                     attroff(COLOR_PAIR(3)); 
+                } else {
+                    mvprintw(0, 0, "You defeated %c! You'r score increased '5'", enemies[i].symbol);
+                    enemies[i].is_alive=0;
+                    score+=5;
+                     map[enemies[i].y][enemies[i].x]=FLOOR_CHAR;                }
+                refresh();
+                if (available_weapons[1].count<=0)
+               {
+                current_weapon.symbol='@';
+               }
+               }
+               
+             }
+
+             if (dx <= 10 && dy <= 10 ){
+                 if (current_weapon.symbol=='a'
+                 && available_weapons[2].count>0 
+                 ){
+                enemies[i].health -= current_weapon.damage;
+                available_weapons[2].count--;
+                enemies[i].chase_steps=0;
+                if (enemies[i].health > 0) {
+                     attron(COLOR_PAIR(3)); 
+                    mvprintw(0, 0, "You attacked %c! Enemy health: %d", enemies[i].symbol, enemies[i].health);
+                     attroff(COLOR_PAIR(3)); 
+                } else {
+                    mvprintw(0, 0, "You defeated %c! You'r score increased '5'", enemies[i].symbol);
+                    enemies[i].is_alive=0;
+                    score+=5;
+                     map[enemies[i].y][enemies[i].x]=FLOOR_CHAR;                }
+                refresh();
+                if (available_weapons[2].count<=0)
+               {
+                current_weapon.symbol='@';
+               }
+
+               }
+             }
+
         }
     }
+
+    if (!under_attack && player_backpack_food.hunger <= 0 ) {
+        player_health += REGEN_RATE;
+        mvprintw(1, 0, "Player health regenerating... Current health: %d", player_health);
+        refresh();
+        napms(1000);
+        mvprintw(1, 0, "                                                        ");
+        refresh();
+    }
+
 }
 
 
@@ -329,6 +529,8 @@ void move_enemy(Enemy *enemy, Player *player, char map[MAP_HEIGHT][MAP_WIDTH]) {
     if (enemy->chase_steps == 0) return;
 
     if (enemy->symbol == DEMON_SYMBOL || enemy->symbol == FIRE_MONSTER_SYMBOL) return;
+    
+    // mvaddch( enemy->y, enemy->x, FLOOR_CHAR);
 
     int dx = (player->x > enemy->x) ? 1 : (player->x < enemy->x) ? -1 : 0;
     int dy = (player->y > enemy->y) ? 1 : (player->y < enemy->y) ? -1 : 0;
@@ -336,7 +538,8 @@ void move_enemy(Enemy *enemy, Player *player, char map[MAP_HEIGHT][MAP_WIDTH]) {
     int new_x = enemy->x + dx;
     int new_y = enemy->y + dy;
 
-    if (map[new_y][new_x] == FLOOR_CHAR) {
+    if (map[new_y][new_x] == FLOOR_CHAR ||  map[new_y][new_x] == '*') {
+        map[ enemy->y][enemy->x] = FLOOR_CHAR;
         enemy->x = new_x;
         enemy->y = new_y;
     }
@@ -344,10 +547,12 @@ void move_enemy(Enemy *enemy, Player *player, char map[MAP_HEIGHT][MAP_WIDTH]) {
     if (enemy->chase_steps > 0) {
         enemy->chase_steps--;
     }
+    
 }
 
 
 int is_player_in_room(Player *player, Room room) {
+    
     return (player->x >= room.x && player->x < room.x + room.width &&
             player->y >= room.y && player->y < room.y + room.height);
 }
@@ -368,7 +573,7 @@ void place_random_enemies(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int num
         int x = selected_room.x + 1 + rand() % (selected_room.width - 2);
         int y = selected_room.y + 1 + rand() % (selected_room.height - 2);
 
-        if (map[y][x] == FLOOR_CHAR) {  
+        if (map[y][x] == FLOOR_CHAR || map[y][x] == '*') {  
             enemies[placed_enemies].x = x;
             enemies[placed_enemies].y = y;
             enemies[placed_enemies].symbol = enemy_symbols[placed_enemies % 5];
@@ -384,15 +589,39 @@ void place_random_enemies(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int num
 }
 
 
-
 void collect_weapon(char weapon_symbol) {
     for (int i = 0; i < 5; i++) {
         if (weapon_symbol == weapon_symbols[i]) {
-            available_weapons[i+1].count++;
-            mvprintw(0, 0, "You collected a weapon! Total %d of %c", available_weapons[i+1].count, weapon_symbols[i]);
+
+            switch (weapon_symbol) {
+                case 'k': 
+                    available_weapons[i + 1].count += 10;
+                    mvprintw(0, 0, "You collected daggers! New total: %d", available_weapons[i + 1].count);
+                    break;
+
+                case 'a': 
+                    available_weapons[i + 1].count += 8;
+                    mvprintw(0, 0, "You collected magic wands! New total: %d", available_weapons[i + 1].count);
+                    break;
+
+                case 't': 
+                    available_weapons[i + 1].count += 20;
+                    mvprintw(0, 0, "You collected arrows! New total: %d", available_weapons[i + 1].count);
+                    break;
+
+                case 'w': 
+                    available_weapons[i + 1].count = 1; 
+                    mvprintw(0, 0, "You now possess a sword.");
+                    break;
+
+                default:
+                    mvprintw(0, 0, "Invalid weapon symbol.");
+                    break;
+            }
+
             refresh();
             sleep(1);
-            mvprintw(0, 0, "                                             ");
+            mvprintw(0, 0, "                                                       ");
             refresh();
             break;
         }
@@ -418,9 +647,46 @@ void place_random_weapons(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int roo
 }
 
 
-void collect_food(char food){
-     player_backpack_food.normal_food_count++;
+void collect_food(char food) {
+    switch (food) {
+        case NORMAL_FOOD:
+            if (player_backpack_food.normal_food_count < 5) {
+                player_backpack_food.normal_food_count++;
+               mvprintw(0 , 0,"You collected a normal food.\n");
+            } else {
+                 mvprintw(0 , 0,"Backpack is full for normal food!\n");
+            }
+            break;
+        case HIGH_QUALITY_FOOD:
+            if (player_backpack_food.high_quality_food_count < 5) {
+                player_backpack_food.high_quality_food_count++;
+               mvprintw(0 , 0,"You collected a high-quality food.\n");
+            } else {
+                mvprintw(0 , 0,"Backpack is full for high-quality food!\n");
+            }
+            break;
+        case MAGIC_FOOD:
+            if (player_backpack_food.magic_food_count < 5) {
+                player_backpack_food.magic_food_count++;
+                mvprintw(0 , 0,"You collected a magic food.\n");
+            } else {
+                mvprintw(0 , 0,"Backpack is full for magic food!\n");
+            }
+            break;
+        case SPOILED_FOOD:
+            if (player_backpack_food.spoiled_food_count <5) {
+                player_backpack_food.spoiled_food_count++;
+                mvprintw(0 , 0,"You collected a spoiled food... Be careful!\n");
+            } else {
+               mvprintw(0 , 0,"Backpack is full for spoiled food!\n");
+            }
+            break;
+        default:
+            break;
+    }
 }
+
+
 
 void collect_spell(char spell) {
     switch (spell) {
@@ -496,12 +762,12 @@ void show_weapon_menu(){
         case 'w':
         if(current_weapon.symbol == '@'){
             if (available_weapons[4].count > 0) {
-                available_weapons[4].count--;
+                // available_weapons[4].count--;
                current_weapon.symbol = 'w';
                     strcpy(current_weapon.name, "Sword");
                     current_weapon.damage = 10;
                     current_weapon.range = 0;
-                    current_weapon.count = 0;
+                    // current_weapon.count = 0;
                 mvprintw(MAP_HEIGHT + 10, 0, "The default weapon changed to %s", current_weapon.name);
                 refresh();
                 sleep(2);
@@ -531,12 +797,12 @@ void show_weapon_menu(){
         case 'k':
         if(current_weapon.symbol == '@'){
             if (available_weapons[1].count > 0) {
-                available_weapons[1].count--;
+                // available_weapons[1].count--;
                 current_weapon.symbol = 'k';
                     strcpy(current_weapon.name, "Dagger");
                     current_weapon.damage = 12;
                     current_weapon.range = 5;
-                    current_weapon.count = 0;
+                    // current_weapon.count = 0;
                 mvprintw(MAP_HEIGHT + 10, 0, "The default weapon changed to %s", current_weapon.name);
                 refresh();
                 sleep(2);
@@ -566,12 +832,12 @@ void show_weapon_menu(){
         case 't':
         if(current_weapon.symbol == '@'){
             if (available_weapons[3].count > 0) {
-                available_weapons[3].count--;
+                // available_weapons[3].count--;
                 current_weapon.symbol = 't';
                     strcpy(current_weapon.name, "Arrow");
                     current_weapon.damage = 5;
                     current_weapon.range = 5;
-                    current_weapon.count = 0;
+                    // current_weapon.count = 0;
                 mvprintw(MAP_HEIGHT + 10, 0, "The default weapon changed to %s", current_weapon.name);
                 refresh();
                 sleep(2);
@@ -600,12 +866,12 @@ void show_weapon_menu(){
         case 'a':
         if(current_weapon.symbol == '@'){
             if (available_weapons[2].count > 0) {
-                available_weapons[2].count--;
+                // available_weapons[2].count--;
                 current_weapon.symbol = 'a';
                     strcpy(current_weapon.name, "Magic Wand");
                     current_weapon.damage = 15;
                     current_weapon.range = 10;
-                    current_weapon.count = 0;
+                    // current_weapon.count = ;
                 mvprintw(MAP_HEIGHT + 10, 0, "The default weapon changed to %s", current_weapon.name);
                 refresh();
                 sleep(2);
@@ -638,35 +904,99 @@ void show_weapon_menu(){
 void show_backpack_food() {
     mvprintw(MAP_HEIGHT + 2, 0, "Backpack_Food:");
     mvprintw(MAP_HEIGHT + 3, 0, "Normal Food (n): %d", player_backpack_food.normal_food_count);
-    mvprintw(MAP_HEIGHT + 4, 0, "Hunger: %d/%d", player_backpack_food.hunger, MAX_HUNGER);
-    mvprintw(MAP_HEIGHT + 5, 0, "Health: %d", player_health);
-    mvprintw(MAP_HEIGHT + 6, 0, "Hunger: [");
+    mvprintw(MAP_HEIGHT + 4, 0, "Premium Food (h): %d", player_backpack_food.high_quality_food_count);
+    mvprintw(MAP_HEIGHT + 5, 0, "Magic Food (m): %d", player_backpack_food.magic_food_count);
+    mvprintw(MAP_HEIGHT + 6, 0, "Corrupt Food (x): %d", player_backpack_food.spoiled_food_count);
+
+    mvprintw(MAP_HEIGHT + 7, 0, "Hunger: %d/%d", player_backpack_food.hunger, MAX_HUNGER);
+    mvprintw(MAP_HEIGHT + 8, 0, "Health: %d", player_health);
+    mvprintw(MAP_HEIGHT + 9, 0, "Hunger: [");
     for (int i = 0; i < player_backpack_food.hunger; i++) {
-            mvprintw(MAP_HEIGHT + 6, 10 + i, "*");  
+            mvprintw(MAP_HEIGHT + 9, 10 + i, "*");  
     }
 
-        mvprintw(MAP_HEIGHT + 6, 20 +player_backpack_food.hunger, "]");  
+        mvprintw(MAP_HEIGHT + 9, 20 +player_backpack_food.hunger, "]");  
         
     refresh();
 
 
     int ch = getch();
-    if (ch == 'n' ) {
+     switch (ch) {
+         case 'n':
+         if (player_backpack_food.normal_food_count > 0) {
         player_health+=5;
         player_backpack_food.normal_food_count--;
         if (player_backpack_food.hunger > 0) player_backpack_food.hunger -= 5;  
-        if (player_backpack_food.hunger <= 0) player_backpack_food.hunger = 0;}
-        mvprintw(MAP_HEIGHT + 7, 0, "Health: %d", player_health);
+        if (player_backpack_food.hunger <= 0) player_backpack_food.hunger = 0;
+         attron(COLOR_PAIR(3)); 
+        mvprintw(MAP_HEIGHT + 10, 0, "Health: %d", player_health);
+         attroff(COLOR_PAIR(3)); 
                 refresh();
-                sleep(2);
-      
-                mvprintw(MAP_HEIGHT + 2, 0, "                                "); 
-                mvprintw(MAP_HEIGHT + 3, 0, "                                "); 
-                mvprintw(MAP_HEIGHT + 4, 0, "                                ");
-                mvprintw(MAP_HEIGHT + 5, 0, "                                ");
-                mvprintw(MAP_HEIGHT + 6, 0, "                                                                 ");
-                mvprintw(MAP_HEIGHT + 7, 0, "                                "); 
+                sleep(2);} else {
+                mvprintw(MAP_HEIGHT + 11, 0, "No Normal Food Left!");
+            }
+            break;
+            case 'h': 
+            if (player_backpack_food.high_quality_food_count > 0) {
+                player_health += 10;
+                player_backpack_food.high_quality_food_count--;
+                player_backpack_food.hunger -= 7;
+                if (player_backpack_food.hunger < 0) player_backpack_food.hunger = 0;
+                current_weapon.damage += 2; 
+                mvprintw(MAP_HEIGHT + 10, 0, "Consumed Premium Food. Attack Power Boosted!");
+            } else {
+                mvprintw(MAP_HEIGHT + 10, 0, "No Premium Food Left!");
+            }
+            break;
+            case 'm':  
+            if (player_backpack_food.magic_food_count > 0) {
+                player_health += 15;
+                player_backpack_food.magic_food_count--;
+                player_backpack_food.hunger -= 10;
+                if (player_backpack_food.hunger < 0) player_backpack_food.hunger = 0;
+                activate_spell(&player_backpack.speed_spells); 
+                mvprintw(MAP_HEIGHT + 10, 0, "Consumed Magic Food. Speed Increased!");
+            } else {
+                mvprintw(MAP_HEIGHT + 10, 0, "No Magic Food Left!");
+            }
+            break;
+            case 'x':  
+            if (player_backpack_food.spoiled_food_count > 0) {
+                player_health -= 10; 
+                if (player_health<=0)
+                {
+                 attron(COLOR_PAIR(1));   
+                 mvprintw(15, 30, "Game Over! You died.");
+                attroff(COLOR_PAIR(1));  
+                update_leaderboard();
+                clear();
                 refresh();
+                napms(3000);
+                endwin();
+                // preGameMenu(win);
+                exit(0);
+                    
+                }
+                player_backpack_food.spoiled_food_count--;
+                mvprintw(MAP_HEIGHT + 10, 0, "Consumed Corrupt Food. Health Decreased!");
+            } else {
+                mvprintw(MAP_HEIGHT + 10, 0, "No Corrupt Food Left!");
+            }
+            break;
+
+        default:
+            mvprintw(MAP_HEIGHT + 10, 0, "Invalid Choice.");
+            break;
+    }
+      refresh();
+    sleep(2);
+
+    
+    for (int i = 2; i <= 10; i++) {
+        move(MAP_HEIGHT + i, 0);
+        clrtoeol();
+    }
+    refresh();
 }
 
 void show_backpack() {
@@ -717,11 +1047,18 @@ void show_backpack() {
         case '!':
             if (player_backpack.damage_spells.spell_count > 0) {
                 player_backpack.damage_spells.spell_count--;
-                player_damage_boost = SPELL_DURATION;
-                mvprintw(MAP_HEIGHT + 6, 0, "Damage spell used!");
+
+                player_backpack.damage_spells.active = 1;
+                player_backpack.damage_spells.remaining_moves = 10;
+
+               player_backpack.damage_spells.original_weapon_power=current_weapon.damage; 
+                current_weapon.damage *= 2;
+
+
+                mvprintw(MAP_HEIGHT + 6, 0, "Damage spell activated! Weapon power doubled.");
                 refresh();
                 sleep(2);
-                mvprintw(MAP_HEIGHT + 6, 0, "                                "); 
+                mvprintw(MAP_HEIGHT + 6, 0, "                                                       "); 
                 refresh();
             }
             break;
@@ -790,21 +1127,16 @@ void discover_secret_door(char map[MAP_HEIGHT][MAP_WIDTH], Player *player) {
     }
 }
 
-
 void place_treasure_room(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int room_count) {
     Room treasure_room;
     int placed = 0;
 
-    
     while (!placed) {
-        int room_index = rand() % room_count;
+        int room_index = 1 + rand() % (room_count - 1);  
         treasure_room = rooms[room_index];
-
-            placed = 1;
-        
+        placed = 1;
     }
 
-   
     for (int y = treasure_room.y; y < treasure_room.y + treasure_room.height; y++) {
         for (int x = treasure_room.x; x < treasure_room.x + treasure_room.width; x++) {
             if (map[y][x] == FLOOR_CHAR) {
@@ -813,7 +1145,6 @@ void place_treasure_room(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int room
         }
     }
 
-   
     int trap_count = 5 + rand() % 3;  
     for (int i = 0; i < trap_count; i++) {
         int tx, ty;
@@ -823,10 +1154,44 @@ void place_treasure_room(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int room
         } while (map[ty][tx] != '*');
         map[ty][tx] = TRAP_HIDDEN_CHAR;
     }
+
+    int colon_x;
+    do {
+        colon_x = treasure_room.x + rand() % treasure_room.width;
+    } while (map[treasure_room.y + treasure_room.height - 1][colon_x] != '_');
+    map[treasure_room.y + treasure_room.height - 1][colon_x] = 'o';  
+}
+
+void place_enchant_room(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int room_count) {
+  
+    Room enchant_room = rooms[0];
+
+    for (int y = enchant_room.y; y < enchant_room.y + enchant_room.height; y++) {
+        for (int x = enchant_room.x; x < enchant_room.x + enchant_room.width; x++) {
+            if (map[y][x] == FLOOR_CHAR) {
+                map[y][x] = 'e'; 
+            }
+        }
+    }
+    char magic_symbols[3] = {SPELL_HEALTH_CHAR,SPELL_SPEED_CHAR,SPELL_DAMAGE_CHAR };
+     int spell_count = 5 + rand() % 3;  
+    for (int i = 0; i < spell_count; i++) {
+        int tx, ty;
+        do {
+            tx = enchant_room.x + 1 + rand() % (enchant_room.width - 2);
+            ty = enchant_room.y + 1 + rand() % (enchant_room.height - 2);
+        } while (map[ty][tx] != 'e'); 
+
+        char selected_symbol = magic_symbols[rand() % 3];  
+        map[ty][tx] = selected_symbol;
+    }
+    
 }
 
 void place_food_in_rooms(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int num_rooms) {
     int item_count = 5; 
+
+    char food_types[] = {NORMAL_FOOD, HIGH_QUALITY_FOOD, MAGIC_FOOD, SPOILED_FOOD};
 
     for (int i = 0; i < item_count; i++) {
         int placed = 0;
@@ -838,13 +1203,15 @@ void place_food_in_rooms(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int num_
             int x = selected_room.x + 1 + rand() % (selected_room.width - 2);
             int y = selected_room.y + 1 + rand() % (selected_room.height - 2);
 
-            if (map[y][x] == FLOOR_CHAR) { 
-                map[y][x] =NORMAL_FOOD; 
+            if (map[y][x] == FLOOR_CHAR) {
+                char food = food_types[rand() % 4]; 
+                map[y][x] = food;
                 placed = 1;
             }
         }
     }
 }
+
 
 void place_traps_in_rooms(char map[MAP_HEIGHT][MAP_WIDTH], Room rooms[], int num_rooms) {
     int selected_rooms[3] = {-1, -1, -1}; 
@@ -913,7 +1280,7 @@ void draw_map_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH], char visible_map[
                     }
                 } else if (map[i][j] == CORRIDOR_CHAR || map[i][j] == BLACK_GOLD_CHAR) {
                     attron(COLOR_PAIR(2));
-                } else if (map[i][j] == FLOOR_CHAR || map[i][j] == TRAP_HIDDEN_CHAR) {
+                } else if (map[i][j] == FLOOR_CHAR || map[i][j] == TRAP_HIDDEN_CHAR || map[i][j] == 'e') {
                     attron(COLOR_PAIR(3));
                 } else if (map[i][j] == OBJECT_CHAR || map[i][j] == WALL_OBJECT_CHAR || map[i][j] == TALA ) {
                     attron(COLOR_PAIR(4));
@@ -971,6 +1338,22 @@ void move_player_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH],char visible_ma
     int new_y = player->y + dy * step_size;
 
     player->moves+=step_size; 
+    
+    if (player_backpack.damage_spells.active) {
+    player_backpack.damage_spells.remaining_moves--;
+
+    if (player_backpack.damage_spells.remaining_moves <= 0) {
+        player_backpack.damage_spells.active = 0;
+        current_weapon.damage = player_backpack.damage_spells.original_weapon_power;
+
+        mvprintw(0, 0, "Damage spell expired! Weapon power restored.");
+        refresh();
+        napms(1000);
+        mvprintw(0, 0, "                                                      ");
+        refresh();
+    }
+}
+
 
     if (player->moves % 20 == 0) { 
         player_backpack_food.hunger++;
@@ -982,7 +1365,9 @@ void move_player_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH],char visible_ma
 
         mvprintw(0, 0, "Hunger increased! Current Hunger: %d", player_backpack_food.hunger);
         if (player_backpack_food.hunger == MAX_HUNGER){
+             attron(COLOR_PAIR(1)); 
              mvprintw(1, 0, "Health dicreased! Currnt Health: %d", player_health);
+              attroff(COLOR_PAIR(1)); 
         }
         refresh();
         sleep(1);
@@ -1000,7 +1385,9 @@ void move_player_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH],char visible_ma
             target == LAST_ROOM_MARK || target == TALA || target == BLACK_GOLD_CHAR || 
             target == TRAP_HIDDEN_CHAR || target == '*' || target == SECRET_DOOR_DISCOVERED || 
             target == SPELL_DAMAGE_CHAR || target == SPELL_HEALTH_CHAR || target == SPELL_SPEED_CHAR||
-            target == NORMAL_FOOD ||target== DAGGER_CHAR || target == MAGIC_WAND_CHAR ||target== ARROW_CHAR || target== SWORD_CHAR ) {
+            target == NORMAL_FOOD ||target== DAGGER_CHAR || target == MAGIC_WAND_CHAR ||target== ARROW_CHAR || 
+            target== SWORD_CHAR || target == SPOILED_FOOD || target == MAGIC_FOOD || target == HIGH_QUALITY_FOOD ||
+             target == TRAP_DISCOVERED_CHAR || target == 'o'|| target == 'e') {
             
             if (target== DAGGER_CHAR || target == MAGIC_WAND_CHAR ||target== ARROW_CHAR || target== SWORD_CHAR )
             {
@@ -1008,10 +1395,19 @@ void move_player_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH],char visible_ma
                 collect_weapon(target);
             }
             
-            if (target == NORMAL_FOOD)
+            if (target == NORMAL_FOOD || target == SPOILED_FOOD || target == MAGIC_FOOD || target == HIGH_QUALITY_FOOD)
             {
                 map[new_y][new_x] = FLOOR_CHAR;
                 collect_food(target);
+            }
+            if (target == 'e')
+            {
+                player_health-=1;
+                 attron(COLOR_PAIR(1)); 
+                mvprintw(0, 0, "You are in enchant room! Your  Health %d",player_health);
+                 attroff(COLOR_PAIR(1)); 
+                refresh();
+                napms(1000);
             }
             
             if (target == SPELL_SPEED_CHAR) {
@@ -1033,12 +1429,8 @@ void move_player_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH],char visible_ma
 
             player->x = new_x;
             player->y = new_y;
+
             
-            for (int i = 0; i < 5; i++) {
-            if (enemies[i].is_alive && is_player_in_room(player, enemies[i].room)) {
-                move_enemy(&enemies[i], player, map);
-            }
-            }
          
            if (player_backpack.speed_spells.active) {
             player_backpack.speed_spells.remaining_moves--;
@@ -1074,7 +1466,9 @@ void move_player_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH],char visible_ma
             }
             if (target == TRAP_HIDDEN_CHAR) {
                     player_health -= 10;
+                     attron(COLOR_PAIR(1)); 
                     mvprintw(0, 0, "Trap discovered! Health -10. You'r Health is %d", player_health); 
+                     attroff(COLOR_PAIR(1)); 
                     refresh();
                     sleep(1); 
                     mvprintw(0, 0, "                                                     "); 
@@ -1084,13 +1478,21 @@ void move_player_with_visibility(char map[MAP_HEIGHT][MAP_WIDTH],char visible_ma
                     clear();
                     refresh();
                     update_leaderboard();
-                    mvprintw(15, 50, "Game Over! You died.");
+                   attron(COLOR_PAIR(1));   
+                    mvprintw(15, 30, "Game Over! You died.");
+                    attroff(COLOR_PAIR(1)); 
+                     int emtiyaz = (score + tala);
+                    mvprintw(16, 31, "Your final score: %d", emtiyaz);
+                    mvprintw(17, 30, "Press 'o' to return to the main menu.");
+                    update_leaderboard();
+                    refresh();
+                    napms(3000);
+                    int key;
+                    while ((key = getch()) != 'o');
                     clear();
                     refresh();
-                    napms(2000);
-                    endwin();
-                    // preGameMenu(win);
-                    exit(0);
+                    tabagheh=5;
+                    main_naghsheh(win);
                     
                 }
         }
@@ -1127,6 +1529,38 @@ void handle_player_movement(char map[MAP_HEIGHT][MAP_WIDTH],char visible_map[MAP
     while (gameRunning) {
         key = getch();
 
+        if (key == 's' || key == 'S')
+        {   
+            player->tabagheh = tabagheh;
+            player->health = player_health;
+            player->gold= tala;
+            player->score = (score+tala);
+            player->hunger = player_backpack_food;
+            player->current_weapon = current_weapon;
+            player->spell = player_backpack;
+           for (int i = 0; i < 5; i++) {
+        player->available_weapons[i] = available_weapons[i];}
+           for (int i = 0; i < 7; i++)
+           {
+            player->enemies[i]= enemies[i];
+           }
+           
+            strcpy(player->username, loggedInUser.username);
+             save_game(map, visible_map,player);
+             clear();
+             mvprintw(18,30 , "Game saved successfully!");
+             mvprintw(19, 30, "Press 'o' to return to the main menu.");
+             napms(3000);
+             gameRunning = 0;
+             int key;
+             while ((key = getch()) != 'o');
+             clear();
+             refresh();
+             tabagheh=5;
+            main_naghsheh(win);
+        }
+        
+
         if (key == 'M' || key == 'm') {
             handle_visibility_toggle(map, visible_map,fullMapReveal);
             mvaddch(player->y, player->x,current_weapon.symbol);
@@ -1158,19 +1592,27 @@ void handle_player_movement(char map[MAP_HEIGHT][MAP_WIDTH],char visible_map[MAP
         }
         
 
-        if (map[player->y][player->x] == LAST_ROOM_MARK) {
+        if (map[player->y][player->x] == LAST_ROOM_MARK || map[player->y][player->x] == SECRET_DOOR_DISCOVERED ) {
             break;
         }
-        if (map[player->y][player->x] == '*') {
-            mvprintw(MAP_HEIGHT + 2, 0, "You found the treasure room! Game Over.");
-            update_leaderboard();
+        if (map[player->y][player->x] == 'o') {
             clear();
+            attron(COLOR_PAIR(3));   
+             mvprintw(15, 30, "You found the treasure room! Game Over.");
+            attroff(COLOR_PAIR(3));  
+            int emtiyaz = (score + tala+50);
+            mvprintw(16, 31, "Your final score: %d", emtiyaz);
+            mvprintw(17, 30, "Press 'o' to return to the main menu.");
+            update_leaderboard();
             refresh();
             napms(3000);
-            endwin();
              gameRunning = 0;
-            // preGameMenu(win);
-            exit(0);
+             int key;
+             while ((key = getch()) != 'o');
+             clear();
+            refresh();
+             tabagheh=5;
+            main_naghsheh(win);
         }
 
 
@@ -1188,8 +1630,14 @@ void handle_player_movement(char map[MAP_HEIGHT][MAP_WIDTH],char visible_map[MAP
     
 
         refresh();
+        for (int i = 0; i < 5; i++) {
+            if (enemies[i].is_alive && is_player_in_room(player, enemies[i].room)) {
+                move_enemy(&enemies[i], player, map);
+                mvaddch(enemies[i].y, enemies[i].x, enemies[i].symbol);
+            }
+            }
 
-        handle_enemy_attack(player, enemies, 5);
+        handle_enemy_weapons_attack(player, enemies, 5, map,win);
     }
 }
 
@@ -1295,15 +1743,14 @@ void place_random_objects(char map[MAP_HEIGHT][MAP_WIDTH], Room room) {
     }
 
 
-    // قرار دادن علامت '=' روی دیوارها بدون قرارگیری روی درها
     int wall_object_count = rand() % 3;
     for (int i = 0; i < wall_object_count; i++) {
         int wx, wy;
         do {
-            if (rand() % 2) { // دیوار افقی
+            if (rand() % 2) { 
                 wy = (rand() % 2) ? room.y : room.y + room.height - 1;
                 wx = room.x + 1 + rand() % (room.width - 2);
-            } else { // دیوار عمودی
+            } else { 
                 wx = (rand() % 2) ? room.x : room.x + room.width - 1;
                 wy = room.y + 1 + rand() % (room.height - 2);
             }
@@ -1311,7 +1758,7 @@ void place_random_objects(char map[MAP_HEIGHT][MAP_WIDTH], Room room) {
         map[wy][wx] = WALL_OBJECT_CHAR;
     }
 }
-//o
+
 int is_adjacent_to_object(char map[MAP_HEIGHT][MAP_WIDTH], int x, int y) {
     int dx[] = {1, -1, 0, 0};
     int dy[] = {0, 0, 1, -1};
@@ -1362,7 +1809,7 @@ void connect_rooms(char map[MAP_HEIGHT][MAP_WIDTH], Room r1, Room r2, int connec
     }
 }
 
-//otagh
+
 void generate_random_map(char map[MAP_HEIGHT][MAP_WIDTH],Room rooms[], int room_count) {
    
     int placed_rooms = 0;
@@ -1403,7 +1850,6 @@ void generate_random_map(char map[MAP_HEIGHT][MAP_WIDTH],Room rooms[], int room_
     place_random_objects(map, new_room); 
     rooms[placed_rooms++] = new_room;
 
-    //اضافه کردن علامت > ر
     if (placed_rooms == room_count) { 
         int lx, ly;
         do {
@@ -1463,7 +1909,7 @@ void main_naghsheh(WINDOW *win) {
     noecho();
     curs_set(FALSE);
     srand(time(NULL));
-    int tabagheh = 1;
+    
     while (tabagheh <= 4) {
         clear();
         int fullMapReveal = 0; 
@@ -1475,6 +1921,28 @@ void main_naghsheh(WINDOW *win) {
         Player player;
 
         initialize_map(map);
+        if (old_game)
+        {
+            load_game(loggedInUser.username,map,visible_map,&player);
+            draw_map_with_visibility(map, visible_map);
+            mvaddch(player.y, player.x, current_weapon.symbol);
+            refresh();
+            tabagheh=player.tabagheh  ;
+            player_health =  player.health ;
+           tala =  player.gold ;
+            score=(player.score - player.gold)  ;
+             player_backpack_food =player.hunger ;
+             current_weapon = player.current_weapon;
+            player_backpack =  player.spell;
+           for (int i = 0; i < 5; i++) {
+         available_weapons[i] = player.available_weapons[i];}
+         for (int i = 0; i < 7; i++)
+           {
+           enemies[i] =  player.enemies[i] ;
+           }
+        }
+        else{
+        
         generate_random_map(map, rooms, 6);
          place_black_gold(map, rooms, 6);
          place_traps_in_rooms(map, rooms, 6);
@@ -1482,6 +1950,11 @@ void main_naghsheh(WINDOW *win) {
          if (tabagheh == 4) {
                 place_treasure_room(map, rooms, 6);
             }
+        if (tabagheh>=2)
+        {
+           place_enchant_room(map,rooms,6);
+        }
+
         place_secret_door(map, rooms);
         place_random_magic_items(map, rooms, 6);
         place_random_weapons(map,rooms,6);
@@ -1498,11 +1971,12 @@ void main_naghsheh(WINDOW *win) {
         draw_map_with_visibility(map, visible_map);
 
         refresh();
+        }
 
        handle_player_movement(map, visible_map, &player, &fullMapReveal,win);
        
 
-        if (map[player.y][player.x] == LAST_ROOM_MARK) {
+        if (map[player.y][player.x] == LAST_ROOM_MARK || map[player.y][player.x] == SECRET_DOOR_DISCOVERED) {
             tabagheh++;
             mvprintw(MAP_HEIGHT + 2, 0, "Moving to floor %d...", tabagheh);
             refresh();
@@ -1513,21 +1987,19 @@ void main_naghsheh(WINDOW *win) {
     }
    
     update_leaderboard();
-    mvprintw(MAP_HEIGHT + 4, 0, "Game Over! Thanks for playing.");
-    refresh();
-    getch();
+    preGameMenu(win);
     endwin();
+    exit(0);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-
-
-
 void display_leaderboard(WINDOW *win) {
     int start_row = 1;
-    int scroll_offset = 0;
     int key;
+    int page_number = 0;
+    const int entries_per_page = 10;
+   int total_pages = ((leaderboard_size/10)+2);
     load_leaderboard(FILENAME);
     initscr();
     start_color();
@@ -1541,32 +2013,42 @@ void display_leaderboard(WINDOW *win) {
     init_pair(10, GOLD_COLOR, COLOR_BLACK);  
     init_pair(11, SILVER_COLOR, COLOR_BLACK);    
     init_pair(12, BRONZE_COLOR, COLOR_BLACK); 
-    
+
     do {
         werase(win);
         box(win, 0, 0);
         
         wattron(win, A_BOLD);
-        mvwprintw(win, start_row, 2, "=== Leaderboard ===");
+        mvwprintw(win, start_row, 2, "=== Leaderboard === (Page %d of %d)", page_number + 1, total_pages);
         wattroff(win, A_BOLD);
 
-        mvwprintw(win, start_row + 1, 2, "Rank  Username       Points  Gold  Games  Experience  Start_time");
-        wattron(win, COLOR_PAIR(10));
-        mvwprintw(win, start_row + 3, 2, "Legend->");
-        mvwprintw(win, start_row + 4, 2, "Champion->");
-        mvwprintw(win, start_row + 5, 2, "GOAT->");
+        mvwprintw(win, start_row + 1, 2, "          Rank  Username       Points  Gold  Games  Experience  Start_time");
+        
+
         int display_count = 0;
-            int row=0;
-        for(int i=0 ; i <leaderboard_size  ; i++){
+        int row = 0;
+        int start_index = page_number * entries_per_page;
+        int end_index = start_index + entries_per_page;
+
+        if (end_index > leaderboard_size) {
+            end_index = leaderboard_size;
+        }
+
+        for (int i = start_index; i < end_index; i++) {
             row = start_row + 3 + display_count;
-            if (i == 0) wattron(win, COLOR_PAIR(10));
-            else if (i == 1) wattron(win, COLOR_PAIR(11));
-            else if (i == 2) wattron(win, COLOR_PAIR(12));
+
+            if (leaderboard[i].rank == 1) wattron(win, COLOR_PAIR(10));
+            else if (leaderboard[i].rank == 2) wattron(win, COLOR_PAIR(11));
+            else if (leaderboard[i].rank== 3) wattron(win, COLOR_PAIR(12));
+            if (leaderboard[i].rank == 1) mvwprintw(win, start_row + 3, 2, "Legend->");
+            else if (leaderboard[i].rank == 2)mvwprintw(win, start_row + 4, 2, "Champion->");
+            else if (leaderboard[i].rank== 3)mvwprintw(win, start_row + 5, 2, "GOAT->");
+
             if (strcmp(leaderboard[i].username, loggedInUser.username) == 0) {
                 wattron(win, A_BOLD | A_REVERSE);
             }
 
-            mvwprintw(win, row , 12, "%d |%s         |%d      |%d    |%d     |%d          |%ld",
+            mvwprintw(win, row, 12, "%d |%s         |%d      |%d    |%d     |%d          |%ld",
                       leaderboard[i].rank,
                       leaderboard[i].username,
                       leaderboard[i].total_points,
@@ -1581,16 +2063,19 @@ void display_leaderboard(WINDOW *win) {
             display_count++;
         }
 
-        mvwprintw(win, start_row + MAX_DISPLAY_ENTRIES + 5, 2, "Use UP/DOWN keys to scroll, 'q' to return.");
+        mvwprintw(win, start_row + entries_per_page + 5, 2, "Use 4 (LEFT) / 6 (RIGHT) keys to scroll, 'q' to return.");
         wrefresh(win);
 
-        
         key = wgetch(win);
-            
+
+        if (key == '6' && page_number < total_pages - 1) {
+            page_number++;
+        } else if (key == '4' && page_number > 0) {
+            page_number--;
+        }
 
     } while (key != 'q');
 }
-
 
 const char* retrieveEmail(const char *username) {
     for (int i = 0; i < user_count; i++) {
@@ -1767,11 +2252,11 @@ void settingsMenu(WINDOW *win) {
                     key = wgetch(win);
                     if (key == '1') 
                     {difficulty = "Easy";
-                    player_health=100;}
+                    player_health=300;}
                     else if (key == '2'){difficulty = "Medium";
-                    player_health=80;} 
+                    player_health=200;} 
                     else if (key == '3'){difficulty = "Hard";
-                    player_health=50;} 
+                    player_health=100;} 
                     break;
 
                 case 1: 
@@ -1878,6 +2363,8 @@ void preGameMenu(WINDOW *win) {
             break;
         case 1:
             mvwprintw(win, 3, 2, "Continuing the Game...");
+             old_game = 1;
+                 main_naghsheh(win);
             break;
         case 2:
             mvwprintw(win, 3, 2, "Displaying Leaderboard...");
@@ -1901,7 +2388,6 @@ void preGameMenu(WINDOW *win) {
     napms(2000);
     preGameMenu(win); 
 }
-
 
 int usernameExists(char* username) {
   for (int i = 0; i < user_count; i++) {
@@ -1987,6 +2473,7 @@ void userLogin(WINDOW *win) {
         }
 
             if (authenticateUser(username, password)) {
+                getch();
                 mvwprintw(win, 11, 0, "Login successful! Press any key to continue to the game menu...");
                 wrefresh(win);
 
@@ -2005,18 +2492,18 @@ void userLogin(WINDOW *win) {
             mvwprintw(win, 8, 0, "Logged in as Guest. Press any key to continue...");
             wrefresh(win);
             strncpy(loggedInUser.username, "Guest", USERNAME_LENGTH);
-            loggedInUser.email[0] = '\0'; // ایمیل خالی برای مهمان
+            loggedInUser.email[0] = '\0'; 
             getch();
             preGameMenu(win);
         }
          else if (choice == 3) { 
-    mvwprintw(win, 8, 0, "Enter your email (Press 'q' or ESC to exit): ");
-    wrefresh(win);
-    echo();
-    wscanw(win, "%s", email);
+            mvwprintw(win, 8, 0, "Enter your email (Press 'q' or ESC to exit): ");
+            wrefresh(win);
+            echo();
+            wscanw(win, "%s", email);
 
-    if (strcmp(email, "q") == 0 || email[0] == 27) {
-        return;
+            if (strcmp(email, "q") == 0 || email[0] == 27) {
+                return;
     }
 
     char* retrievedPassword = retrievePassword(email);
@@ -2251,7 +2738,6 @@ void dynamicMenu(WINDOW *win, char *menu[], int n_options) {
         exit(0);
     }
 }
-
 
 int main() {
     loadUsers(); 
